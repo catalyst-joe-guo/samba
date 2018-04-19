@@ -694,6 +694,35 @@ static int construct_msds_keyversionnumber(struct ldb_module *module,
 	_UF_TRUST_ACCOUNTS \
 )
 
+
+/*
+ * Returns the Effective-MaximumPasswordAge for a user
+ */
+static int64_t get_user_max_pwd_age(struct ldb_context *ldb,
+				    struct ldb_message *user_msg,
+				    struct ldb_dn *nc_root)
+{
+	int ret;
+	struct ldb_message *pso = NULL;
+
+	/* if a PSO applies to the user, use its maxPwdAge */
+	ret = get_pso_for_user(ldb, user_msg, &pso);
+	if (ret != LDB_SUCCESS) {
+
+		/* log the error, but fallback to the domain default */
+		DBG_ERR("Error retrieving PSO for %s",
+			ldb_dn_get_linearized(user_msg->dn));
+	}
+
+	if (pso != NULL) {
+		return ldb_msg_find_attr_as_int64(pso,
+					          "msDS-MaximumPasswordAge", 0);
+	}
+
+	/* otherwise return the default domain value */
+	return samdb_search_int64(ldb, user_msg, 0, nc_root, "maxPwdAge", NULL);
+}
+
 /*
   calculate msDS-UserPasswordExpiryTimeComputed
 */
@@ -741,8 +770,8 @@ static NTTIME get_msds_user_password_expiry_time_computed(struct ldb_module *mod
 	 * maxPwdAge: -9223372036854775808 (-0x8000000000000000ULL)
 	 *
 	 */
-	maxPwdAge = samdb_search_int64(ldb_module_get_ctx(module), msg, 0,
-				       domain_dn, "maxPwdAge", NULL);
+	maxPwdAge = get_user_max_pwd_age(ldb_module_get_ctx(module), msg,
+					 domain_dn);
 	if (maxPwdAge >= -864000000000) {
 		/*
 		 * This is not really possible...
@@ -987,6 +1016,7 @@ static int pso_search_by_sids(struct ldb_context *ldb, TALLOC_CTX *mem_ctx,
 		"msDS-PasswordSettingsPrecedence",
 		"objectGUID",
 		"msDS-LockoutDuration",
+		"msDS-MaximumPasswordAge",
 		NULL
 	};
 
@@ -1225,6 +1255,7 @@ static const char *user_account_control_computed_attrs[] =
 static const char *user_password_expiry_time_computed_attrs[] =
 {
 	"pwdLastSet",
+	PSO_ATTR_DEPENDENCIES,
 	NULL
 };
 
